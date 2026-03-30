@@ -11,38 +11,19 @@ export default defineConfig({
   },
   ssr: {
     external: ['fsevents'],
-    resolve: {
-      // Standard conditions for Cloudflare Workers.
-      // 'workerd' is the WinterCG runtime key for Cloudflare Workers.
-      // This causes @sentry/tanstackstart-react to resolve its 'workerd'
-      // export condition → index.server.js → re-exports @sentry/node.
-      conditions: ['workerd', 'worker', 'browser', 'import', 'module', 'default'],
-    },
+    // No explicit ssr.resolve.conditions — Nitro's cloudflare-module preset
+    // automatically adds 'workerd' and 'worker' conditions, which causes
+    // @sentry/tanstackstart-react to resolve its workerd export condition
+    // → index.server.js → re-exports @sentry/node.
   },
   plugins: [
     tanstackStart(),
+    // This is the only config that matters for the repro:
+    // cloudflare-module preset + noExternals bundles everything into the Worker,
+    // and Nitro automatically sets workerd/worker conditions.
     nitro({
       preset: 'cloudflare-module',
-      noExternals: true, // Workers has no node_modules — bundle everything
-      rollupConfig: {
-        output: {
-          plugins: [
-            {
-              name: 'nitro:cloudflare-guard-createRequire',
-              generateBundle(_options, bundle) {
-                for (const chunk of Object.values(bundle)) {
-                  if (chunk.type === 'chunk' && chunk.code) {
-                    chunk.code = chunk.code.replaceAll(
-                      'createRequire(import.meta.url)',
-                      'createRequire(import.meta.url||"file:///")',
-                    )
-                  }
-                }
-              },
-            },
-          ],
-        },
-      },
+      noExternals: true,
     }) as PluginOption,
     react(),
   ],

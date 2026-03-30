@@ -4,7 +4,9 @@ Minimal reproduction for [getsentry/sentry-javascript#20038](https://github.com/
 
 ## The issue
 
-`@sentry/tanstackstart-react@10.46.0` has `workerd` and `worker` export conditions in `package.json` that resolve to `index.server.js`, which does `export * from '@sentry/node'`. When bundled for Cloudflare Workers (where the `workerd` condition is active and deps are non-externalized), this pulls `@sentry/node` + OpenTelemetry + undici + `node:*` built-ins into the Worker bundle.
+`@sentry/tanstackstart-react@10.46.0` has `workerd` and `worker` export conditions in `package.json` that resolve to `index.server.js`, which does `export * from '@sentry/node'`. When bundled for Cloudflare Workers — where Nitro's `cloudflare-module` preset automatically sets the `workerd` condition and `noExternals: true` bundles everything — this pulls `@sentry/node` + OpenTelemetry + undici + `node:*` built-ins into the Worker bundle.
+
+No custom `ssr.resolve.conditions` are needed to trigger this — Nitro sets `workerd`/`worker` conditions automatically for the `cloudflare-module` preset.
 
 ## Steps to reproduce
 
@@ -18,7 +20,7 @@ bun run build:analyze
 ```
 === Bundle Analysis ===
 
-PROBLEM: .output/server/_chunks/router-Dcxcq9Jg.mjs (1324 KiB)
+PROBLEM: .output/server/_chunks/router-Dcxcq9Jg.mjs (1323 KiB)
   - contains: node:http
   - contains: node:os
   - contains: node:fs
@@ -27,11 +29,9 @@ PROBLEM: .output/server/_chunks/router-Dcxcq9Jg.mjs (1324 KiB)
   - contains: undici
   - contains: @opentelemetry/instrumentation
 
-Total server output: 2067 KiB across 12 files
+Total server output: 2066 KiB across 12 files
 
 ❌ @sentry/node artifacts found in Worker bundle.
-   The workerd/worker export conditions resolved to the Node server entry.
-   This will cause "Cannot initialize ExportedHandler" on Cloudflare Workers.
 ```
 
 ### Runtime crash (requires wrangler)
@@ -65,11 +65,11 @@ Total server output: 923 KiB across 9 files
 ✅ No @sentry/node artifacts found — bundle is Workers-safe.
 ```
 
-Bundle drops from **2,067 KiB** to **923 KiB** and all `node:*` / undici / OpenTelemetry references are gone.
+Bundle drops from **2,066 KiB** to **923 KiB** and all `node:*` / undici / OpenTelemetry references are gone.
 
 ## Key files
 
-- [`vite.config.ts`](vite.config.ts) — Nitro `cloudflare-module` preset, `noExternals: true`, `ssr.resolve.conditions` includes `workerd`
+- [`vite.config.ts`](vite.config.ts) — Nitro `cloudflare-module` preset with `noExternals: true` (no custom conditions needed)
 - [`src/router.tsx`](src/router.tsx) — imports `@sentry/tanstackstart-react` (the problematic import)
 - [`scripts/check-bundle.js`](scripts/check-bundle.js) — post-build analysis scanning for `@sentry/node` artifacts
 
@@ -77,7 +77,7 @@ Bundle drops from **2,067 KiB** to **923 KiB** and all `node:*` / undici / OpenT
 
 | Dependency | Version |
 |---|---|
-| `@sentry/tanstackstart-react` | 10.46.0 |
+| `@sentry/tanstackstart-react` | ^10.46.0 |
 | `@tanstack/react-start` | ~1.166.1 |
 | `@tanstack/react-router` | ~1.163.3 |
 | `nitro` | ~3.0.260311-beta |
