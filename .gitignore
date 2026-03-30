@@ -3,3 +3,4 @@ node_modules
 .vinxi
 dist
 .wrangler
+vite.config.timestamp_*.js
