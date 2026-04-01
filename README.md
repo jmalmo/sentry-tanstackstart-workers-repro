@@ -1,77 +1,70 @@
-# Repro: `@sentry/tanstackstart-react` breaks Cloudflare Workers
+# Repro: `@sentry/tanstackstart-react` crashes Cloudflare Workers
 
 Minimal reproduction for [getsentry/sentry-javascript#20038](https://github.com/getsentry/sentry-javascript/issues/20038).
 
 ## The issue
 
-`@sentry/tanstackstart-react@10.46.0` has `workerd` and `worker` export conditions in `package.json` that resolve to `index.server.js`, which does `export * from '@sentry/node'`. When bundled for Cloudflare Workers — where Nitro's `cloudflare-module` preset automatically sets the `workerd` condition and `noExternals: true` bundles everything — this pulls `@sentry/node` + OpenTelemetry + undici + `node:*` built-ins into the Worker bundle.
-
-No custom `ssr.resolve.conditions` are needed to trigger this — Nitro sets `workerd`/`worker` conditions automatically for the `cloudflare-module` preset.
+`@sentry/tanstackstart-react@10.46.0` has `workerd` and `worker` export conditions that resolve to `index.server.js`, which does `export * from '@sentry/node'`. When bundled for Cloudflare Workers (Nitro `cloudflare-module` preset, `noExternals: true`), this pulls `@sentry/node` + its full dependency tree into the Worker bundle, causing a runtime crash: `Error: No such module "node:fs"`.
 
 ## Steps to reproduce
 
 ```bash
 bun install
-bun run build:analyze
-```
-
-### Output (demonstrating the bug)
-
-```
-=== Bundle Analysis ===
-
-PROBLEM: .output/server/_chunks/router-Dcxcq9Jg.mjs (1323 KiB)
-  - contains: node:http
-  - contains: node:os
-  - contains: node:fs
-  - contains: node:diagnostics_channel
-  - contains: node:zlib
-  - contains: undici
-  - contains: @opentelemetry/instrumentation
-
-Total server output: 2066 KiB across 12 files
-
-❌ @sentry/node artifacts found in Worker bundle.
-```
-
-### Runtime crash (requires wrangler)
-
-```bash
 bun run build
 bun run preview
-# Visit http://localhost:8787 — returns 500 "Cannot initialize ExportedHandler"
+# Visit http://localhost:8787 → HTTP 500
+# Wrangler logs: Error: No such module "node:fs", imported from router chunk
 ```
 
-## Fix verification
+### Result comparison
 
-Edit `src/router.tsx` — swap the import:
+| Config | Router chunk | `wrangler dev` | HTTP |
+|---|---|---|---|
+| No Sentry | 25 KiB | Works | **200** |
+| `@sentry/tanstackstart-react` | 1,324 KiB | `No such module "node:fs"` | **500** |
+| `@sentry/react` | 183 KiB | Works | **200** |
+
+## Verify: remove Sentry to confirm baseline works
+
+Comment out the Sentry import in `src/router.tsx`:
+
+```diff
+-import * as Sentry from '@sentry/tanstackstart-react'
++// import * as Sentry from '@sentry/tanstackstart-react'
+```
+
+(Also comment out the `Sentry.init(...)` block.)
+
+```bash
+bun run build && bun run preview
+# Visit http://localhost:8787 → HTTP 200 ✅
+```
+
+## Verify: swap to `@sentry/react` to confirm fix
 
 ```diff
 -import * as Sentry from '@sentry/tanstackstart-react'
 +import * as Sentry from '@sentry/react'
 ```
 
-Then rebuild:
+```bash
+bun run build && bun run preview
+# Visit http://localhost:8787 → HTTP 200 ✅
+```
+
+## Bundle analysis (optional)
 
 ```bash
 bun run build:analyze
 ```
 
-```
-=== Bundle Analysis ===
-
-Total server output: 923 KiB across 9 files
-
-✅ No @sentry/node artifacts found — bundle is Workers-safe.
-```
-
-Bundle drops from **2,066 KiB** to **923 KiB** and all `node:*` / undici / OpenTelemetry references are gone.
+Shows the `@sentry/node` artifacts (`node:http`, `node:os`, `node:fs`, `undici`, `@opentelemetry/instrumentation`) in the Worker bundle.
 
 ## Key files
 
-- [`vite.config.ts`](vite.config.ts) — Nitro `cloudflare-module` preset with `noExternals: true` (no custom conditions needed)
-- [`src/router.tsx`](src/router.tsx) — imports `@sentry/tanstackstart-react` (the problematic import)
-- [`scripts/check-bundle.js`](scripts/check-bundle.js) — post-build analysis scanning for `@sentry/node` artifacts
+- [`vite.config.ts`](vite.config.ts) — Nitro `cloudflare-module` preset, `noExternals: true`
+- [`src/router.tsx`](src/router.tsx) — imports `@sentry/tanstackstart-react` (the crash trigger)
+- [`scripts/check-bundle.js`](scripts/check-bundle.js) — post-build bundle analysis
 
 ## Environment
 
@@ -82,4 +75,5 @@ Bundle drops from **2,066 KiB** to **923 KiB** and all `node:*` / undici / OpenT
 | `@tanstack/react-router` | ~1.163.3 |
 | `nitro` | ~3.0.260311-beta |
 | `vite` | rolldown-vite ^7.3.1 |
+| `wrangler` | ^4.0.0 |
 | Cloudflare Workers | `nodejs_compat`, compat date `2025-09-01` |
